@@ -42,6 +42,10 @@ class ImageGenerator():
             self.net = caffe.Classifier('tmp.prototxt', self.trained_file,
                                              mean = np.float32([104.0, 116.0, 122.0]), # ImageNet mean, training set dependent
                                              channel_swap = (2,1,0)) # the reference model has channels in BGR order instead of RGB
+            
+            self.window_width=self.net.image_dims[0]
+            self.window_height=self.net.image_dims[1]
+            self.whole_image=[]
 
         """
         preprocess: formats the image so it can be used
@@ -73,11 +77,40 @@ class ImageGenerator():
                                             mean = np.float32([104.0, 116.0, 122.0]), # ImageNet mean, training set dependent
                                             channel_swap = (2,1,0)) # the reference model has channels in BGR order instead of RGB
             net=self.net
-            net.blobs[self.src_layer].data[:] = self.process_image(width,height)
-            
-            for i in range(num_iters):
-                self.alter_image(class_num)
+            self.whole_image = self.process_image(width,height)
+            if(width == self.window_width and height == self.window_height):
+                net.blobs[self.src_layer].data[:] = self.whole_image
+                for i in range(num_iters):
+                    self.alter_image(class_num,0,0)
+                    sys.stdout.flush()
+                    sys.stdout.write("\rIteration number : "+str(i))
+
+                self.whole_image= net.blobs[self.src_layer].data[:]
                 self.save_net_as_image(output_file,width,height)
+            else:
+                for i in range(num_iters):
+                    for x in range(width-self.window_width):
+                        for y in range(height-self.window_height):
+                            new_arr=[[[[0 for k in range(self.window_width)] for j in range(self.window_height)] for i in range(3)]for l in range(1) ]
+                            #print len(self.whole_image),len(self.whole_image[0]),len(self.whole_image[0][0]),len(self.whole_image[0][0][0])
+                            #print len(new_arr),len(new_arr[0]),len(new_arr[0][0]),len(new_arr[0][0][0])
+                            for k in range(3):
+                                for i in range(x,x+self.window_width):
+                                    for j in range(y,y+self.window_height):
+                                        new_arr[0][k][i-x][j-y]=self.whole_image[0][k][i][j]
+                            net.blobs[self.src_layer].data[:]=new_arr
+                            self.alter_image(class_num,x,y)
+                            for k in range(3):
+                                for i in range(x,x+self.window_width):
+                                    for j in range(y,y+self.window_height):
+                                        self.whole_image[0][k][i][j]=new_arr[0][k][i-x][j-y]
+                    sys.stdout.flush()
+                    sys.stdout.write("\rIteration number : "+str(i))
+
+
+                self.save_net_as_image(output_file,width,height)
+            self.whole_image=[]
+
 
         """
         generate_probable_image: generates an image by iterating until the probability of it being a class is over a certain threshold
@@ -99,13 +132,14 @@ class ImageGenerator():
             #None for input means random
             while(probability<threshold):
                 probability=self.alter_image(class_num)
-                self.save_net_as_image(output_file,width,height)
+            self.whole_image= net.blobs[self.src_layer].data[:]
+            self.save_net_as_image(output_file,width,height)
 
         """   
         alter_image: a single iteration of the image alteration
         class_num the class that the image is being oriented towards
         """
-        def alter_image(self,class_num):
+        def alter_image(self,class_num,x,y):
             net=self.net
             src = net.blobs[self.src_layer]       
             #JITTER SHIFT/REGULARIZER
@@ -171,7 +205,7 @@ class ImageGenerator():
         height is the height of the image
         """
         def save_net_as_image(self,output_file,width,height):
-            img = self.net.blobs[self.src_layer].data[:]
+            img = np.array(self.whole_image)
             img = img.reshape(3,width,height)
             img = self.deprocess(self.net, img)
             out_img=np.uint8(np.clip(img,0,255))
