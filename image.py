@@ -29,51 +29,30 @@ class ImageGenerator():
         jitter represents the random shake between iterations of image generation
         gaussian_blur is a blur effect that is used in between iterations of the network to prevent overfitting
         """
-        def __init__(self, trained_file, model_file,src_layer,output_layer,prob_layer,learning_rate=1.5,jitter=0,gaussian_blur=False):
-            self.trained_file=trained_file
-            self.model_file=model_file
-            self.learning_rate=learning_rate
-            self.jitter=jitter
-            self.gaussian_blur=gaussian_blur
-            self.src_layer=src_layer
-            self.output_layer=output_layer
-            self.prob_layer=prob_layer
-            model = caffe.io.caffe_pb2.NetParameter()
+        def __init__(self, model):
+	    self.model=model
+	   
+            caffe_model = caffe.io.caffe_pb2.NetParameter()
             
-            pb.text_format.Merge(open(self.model_file).read(), model)
-            model.force_backward = True
-            open('tmp.prototxt','w').write(str(model))
+            pb.text_format.Merge(open(self.model.model_file).read(), caffe_model)
+            caffe_model.force_backward = True
+            open('tmp.prototxt','w').write(str(caffe_model))
             caffe.set_mode_gpu()
 
             self.initialize_net()
-            
+
             self.window_width=self.net.image_dims[0]
             self.window_height=self.net.image_dims[1]
-            self.whole_image=[]
 
         """
         initialize_net: reinetializes the network
         """
         def initialize_net(self):
-            self.net = caffe.Classifier('tmp.prototxt', self.trained_file,
+            self.net = caffe.Classifier('tmp.prototxt', self.model.trained_file,
                                              mean = np.float32([104.0, 116.0, 122.0]), # ImageNet mean, training set dependent
                                              channel_swap = (2,1,0)) # the reference model has channels in BGR order instead of RGB
 
-        """
-        preprocess: formats the image so it can be used
-        net the network variable that must be passed here
-        img a floating point representation of the image that will be adjusted
-        """
-        def preprocess(self,net, img):
-            return np.float32(np.rollaxis(img, 2)[::-1]) - net.transformer.mean['data']
-
-        """
-        deprocess: reverses the formatting affect of preprocess
-        net the network variable that must be passed here
-        img a floating point representation of the image that will be adjusted
-        """
-        def deprocess(self,net, img):
-            return np.dstack((img + net.transformer.mean['data'])[::-1])
+    
 
         """
         generate_image_iterations: generates an image by iterating over a certain number of times
@@ -87,32 +66,32 @@ class ImageGenerator():
         def generate_image_iterations(self,width,height,num_iters, class_num, output_file,step=1, input_file=None):
             self.initialize_net()
             net=self.net
-            self.whole_image = self.get_image_data(width,height)
+            image=NetworkImage(self.model,output_file,width,height)
 
-            if(width == self.window_width and height == self.window_height):
+            if(width == self.model.window_width and height == self.model.window_height):
                 self.generate_fitting_image_iterations(num_iters,class_num,output_file,input_file)
             else:
                 for i in range(num_iters):
                     #sys.stdout.flush()
                     #sys.stdout.write("\rIteration number : "+str(i))
                     print i
-                    for x in xrange(0,width-self.window_width,step):
-                        for y in xrange(0,height-self.window_height,step):
-                            new_arr=[[[[0 for k in range(self.window_width)] for j in range(self.window_height)] for i in range(3)]for l in range(1) ]
+                    for x in xrange(0,width-self.model.window_width,step):
+                        for y in xrange(0,height-self.model.window_height,step):
+                            new_arr=[[[[0 for k in range(self.model.window_width)] for j in range(self.model.window_height)] for i in range(3)]for l in range(1) ]
                             
                             #print len(self.whole_image),len(self.whole_image[0]),len(self.whole_image[0][0]),len(self.whole_image[0][0][0])
                             #print len(new_arr),len(new_arr[0]),len(new_arr[0][0]),len(new_arr[0][0][0])
                             
-                            self.copy_array_section(x,y,0,0,self.window_width,self.window_height,self.whole_image,new_arr)
+                            self.copy_array_section(x,y,0,0,self.model.window_width,self.model.window_height,image.whole_image,new_arr)
 
-                            net.blobs[self.src_layer].data[:]=new_arr
+                            net.blobs[self.model.src_layer].data[:]=new_arr
                             
                             self.iterate_network(class_num)
                             
-                            self.copy_array_section(0,0,x,y,self.window_width,self.window_height,net.blobs[self.src_layer].data[:],self.whole_image)
+                            self.copy_array_section(0,0,x,y,self.model.window_width,self.model.window_height,net.blobs[self.model.src_layer].data[:],image.whole_image)
 
-                self.save_network_as_image(output_file,width,height)
-            self.whole_image=[]
+                image.save_as(output_file)
+            image.whole_image=[]
 
         """
         copy_array_section: copies the section specified by x,y,width, and height from the input array into the output array
@@ -136,16 +115,17 @@ class ImageGenerator():
 
             self.initialize_net()
             net=self.net
-            self.whole_image = self.get_image_data(self.window_width,self.window_height)
+            image=NetworkImage(self.model,output_file,width,height)
 
-            net.blobs[self.src_layer].data[:] = self.whole_image
+
+            net.blobs[self.model.src_layer].data[:] = image.whole_image
             for i in range(num_iters):
                 self.iterate_network(class_num)
                 sys.stdout.flush()
                 sys.stdout.write("\rIteration number : "+str(i))
 
-            self.whole_image= net.blobs[self.src_layer].data[:]
-            self.save_network_as_image(output_file,self.window_width,self.window_height)
+            image.whole_image= net.blobs[self.model.src_layer].data[:]
+            image.save_as(output_file)
 
 
         """
@@ -161,36 +141,34 @@ class ImageGenerator():
             probability=0.0
             self.initialize_net()
             net=self.net
-            self.whole_image = self.get_image_data(width,height)
+            image=NetworkImage(self.model,output_file,width,height)
 
-            if(width == self.window_width and height == self.window_height):
+            if(width == self.model.window_width and height == self.model.window_height):
                 self.generate_fitting_image_probable(threshold,class_num,output_file,input_file)
             else:
                 while(probability<threshold):
                     probability=0.0
 
-                    for x in xrange(0,width-self.window_width,step):
-                        for y in xrange(0,height-self.window_height,step):
-                            new_arr=[[[[0 for k in range(self.window_width)] for j in range(self.window_height)] for i in range(3)]for l in range(1) ]
+                    for x in xrange(0,width-self.model.window_width,step):
+                        for y in xrange(0,height-self.model.window_height,step):
+                            new_arr=[[[[0 for k in range(self.model.window_width)] for j in range(self.model.window_height)] for i in range(3)]for l in range(1) ]
 
                             #print len(self.whole_image),len(self.whole_image[0]),len(self.whole_image[0][0]),len(self.whole_image[0][0][0])
                             #print len(new_arr),len(new_arr[0]),len(new_arr[0][0]),len(new_arr[0][0][0])
                             
-                            self.copy_array_section(x,y,0,0,self.window_width,self.window_height,self.whole_image,new_arr)
-                            net.blobs[self.src_layer].data[:]=new_arr
+                            self.copy_array_section(x,y,0,0,self.model.window_width,self.model.window_height,image.whole_image,new_arr)
+                            net.blobs[self.model.src_layer].data[:]=new_arr
 
                             probability+=self.iterate_network(class_num)
 
-                            self.copy_array_section(0,0,x,y,self.window_width,self.window_height,net.blobs[self.src_layer].data[:],self.whole_image)
+                            self.copy_array_section(0,0,x,y,self.model.window_width,self.model.window_height,net.blobs[self.model.src_layer].data[:],image.whole_image)
                             
                             
-                    probability/=(width-self.window_width)/step*(height-self.window_height)/step
+                    probability/=(width-self.model.window_width)/step*(height-self.model.window_height)/step
                     print probability
 
-
-
-                self.save_network_as_image(output_file,width,height)
-            self.whole_image=[]
+                image.save_as()
+            image.whole_image=[]
 
         """
         generate_image_iterations: generates an image by iterating over a certain number of times
@@ -203,18 +181,19 @@ class ImageGenerator():
             probability=0.0
             self.initialize_net()
             net=self.net
-            self.whole_image = self.get_image_data(self.window_width,self.window_height)
 
-            net.blobs[self.src_layer].data[:] = self.whole_image
+            image=NetworkImage(self.model,output_file,width,height)
+            
+            net.blobs[self.model.src_layer].data[:] = image.whole_image
             while(probability<threshold):
                 loss = self.net.forward()
-                probability = loss[self.prob_layer][0][class_num]
+                probability = loss[self.model.prob_layer][0][class_num]
                 self.iterate_network(class_num)
                 sys.stdout.flush()
                 sys.stdout.write("\rProbability : "+str(probability))
 
-            self.whole_image= net.blobs[self.src_layer].data[:]
-            self.save_network_as_image(output_file,self.window_width,self.window_height)
+            image.whole_image= net.blobs[self.model.src_layer].data[:]
+            image.save_as(output_file,self.model.window_width,self.model.window_height)
 
         """   
         iterate_network: a single iteration of the image alteration
@@ -222,15 +201,15 @@ class ImageGenerator():
         """
         def iterate_network(self,class_num):
             net=self.net
-            src = net.blobs[self.src_layer]       
+            src = net.blobs[self.model.src_layer]       
             #JITTER SHIFT/REGULARIZER
             ox, oy = np.random.randint(-self.jitter, self.jitter+1, 2)
             src.data[0] = np.roll(np.roll(src.data[0], ox, -1), oy, -2) # apply jitter shift
             #GRADIENTS
             prob = net.forward()
-            calc_prob=prob[self.prob_layer][0][class_num]
-            net.blobs[self.output_layer].diff[0][class_num] = 1  #954 banana, 100 black swan
-            net.backward(start=self.output_layer)
+            calc_prob=prob[self.model.prob_layer][0][class_num]
+            net.blobs[self.model.output_layer].diff[0][class_num] = 1  #954 banana, 100 black swan
+            net.backward(start=self.model.output_layer)
          
             g = src.diff[0]
             src.data[:] += self.learning_rate/np.abs(g).mean() * g #"IMAGE UPDATE"
@@ -239,19 +218,12 @@ class ImageGenerator():
             src.data[0] = np.roll(np.roll(src.data[0], -ox, -1), -oy, -2)
 
             #CLIP
-            bias = net.transformer.mean[self.src_layer]
+            bias = net.transformer.mean[self.model.src_layer]
             src.data[:] = np.clip(src.data, -bias, 255-bias)
         
             return calc_prob
 
-        """
-        generate_random_image: generates a random numpy float array of size width x height representing the input of the network
-        width the width of the array
-        height the height of the random array
-        """
-        def generate_random_image(self,width,height):
-            return np.random.random((width,height,3))*(width+1)
-    
+           
         """
         get_image_probability: retuns the probability that an image at path is of a class
         path represents the path of the image
@@ -264,38 +236,80 @@ class ImageGenerator():
             loss= self.net.forward()
             return loss[self.prob_layer][0][class_num]
     
-        """
-        get_image_data: gives an array form of an image, if the input image is None then a random image is used 
-        width represents the width of the image
-        height represents the height of the image
-        input_file represents the path of the input image to be altered
-        """
-        def get_image_data(self,width,height,input_file=None):
-            if input_file==None:
-                img = self.generate_random_image(width,height)
-                img = [self.preprocess(self.net,img)]
-            else:
-                img = np.float32(PIL.Image.open(input_image))
-                img = [self.preprocess(self.net, img)]
-            return img
-
-        """
-        save_network_as_image: saves the network as an image
-        output_file is a file path for the image to be saved
-        width is the width of the image
-        height is the height of the image
-        """
-        def save_network_as_image(self,output_file,width,height):
-            img = np.array(self.whole_image)
-            img = img.reshape(3,width,height)
-            img = self.deprocess(self.net, img)
-            out_img=np.uint8(np.clip(img,0,255))
-            PIL.Image.fromarray(out_img).save(output_file)
+       
 
 
 class NetworkImage():
 
+    def __init__(self,model,width,height,whole_image=None):
+	if(whole_image == None):
+	    whole_image=self.get_image_data(width,height)
+	self.width=width
+	self.height=height
+        self.model=model
+        self.whole_image=whole_image
 
-    def __init__(self):
-        pass
+    """
+    save_network_as_image: saves the network as an image
+    output_file is a file path for the image to be saved
+    width is the width of the image
+    height is the height of the image
+    """
+    def save_as(self,output_file):
+	self.output_file=output_file
+        img = np.array(self.whole_image)
+        img = img.reshape(3,self.width,self.height)
+        img = self.deprocess(self.net, img)
+        out_img=np.uint8(np.clip(img,0,255))
+        PIL.Image.fromarray(out_img).save(self.output_file)
 
+    """
+    get_image_data: gives an array form of an image, if the input image is None then a random image is used 
+    width represents the width of the image
+    height represents the height of the image
+    input_file represents the path of the input image to be altered
+    """
+    def get_image_data(self,width,height,input_file=None):
+        if input_file==None:
+            img = self.generate_random_image(width,height)
+            img = [self.preprocess(img)]
+        else:
+            img = np.float32(PIL.Image.open(input_image))
+            img = [self.preprocess(img)]
+        return img
+
+    """
+    preprocess: formats the image so it can be used
+    net the network variable that must be passed here
+    img a floating point representation of the image that will be adjusted
+    """
+    def preprocess(self, img):
+        return np.float32(np.rollaxis(img, 2)[::-1]) -  np.float32([104.0, 116.0, 122.0])
+
+    """
+    deprocess: reverses the formatting affect of preprocess
+    net the network variable that must be passed here
+    img a floating point representation of the image that will be adjusted
+    """
+    def deprocess(self, img):
+        return np.dstack((img +  np.float32([104.0, 116.0, 122.0]))[::-1])
+
+    """
+    generate_random_image: generates a random numpy float array of size width x height representing the input of the network
+    width the width of the array
+    height the height of the random array
+    """
+    def generate_random_image(self,width,height):
+        return np.random.random((width,height,3))*(width+1)
+
+class Model():
+
+    def __init__(self,trained_file, model_file,src_layer,output_layer,prob_layer,learning_rate=1.5,jitter=0,gaussian_blur=False):
+        self.trained_file=trained_file
+        self.model_file=model_file
+        self.learning_rate=learning_rate
+        self.jitter=jitter
+        self.gaussian_blur=gaussian_blur
+        self.src_layer=src_layer
+        self.output_layer=output_layer
+        self.prob_layer=prob_layer
